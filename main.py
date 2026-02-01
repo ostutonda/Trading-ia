@@ -7,7 +7,7 @@ from src.indicators import apply_indicators
 from src.train_model import train_ia_model
 from src.trader import live_prediction
 
-st.set_page_config(page_title="Otm_ai_Trada", layout="wide")
+st.set_page_config(page_title="CCTrada", layout="wide")
 
 # --- SIDEBAR ---
 st.sidebar.header("\U0001f579\ufe0f Paramètres")
@@ -22,7 +22,7 @@ tf_nom = st.sidebar.selectbox("Timeframe", list(config.TIMEFRAMES.keys()))
 tf_val = config.TIMEFRAMES[tf_nom]
 
 # Nombre de bougies
-nb_candles = st.sidebar.number_input("Bougies à extraire", min_value=100, max_value=250000, value=3000)
+nb_candles = st.sidebar.number_input("Bougies à extraire", min_value=100, max_value=80000, value=3000)
 
 if st.sidebar.button("\U0001f4e5 Actualiser les données"):
     progress = st.progress(0)
@@ -81,24 +81,3 @@ try:
 
 except Exception as e:
     st.warning("Aucune donnée détectée dans la base.")
-
-
-# Initialisation de la mémoire des alertes
-if 'last_signal_time' not in st.session_state:
-    st.session_state.last_signal_time = 0
-
-if mode_live:
-    signal, confiance = live_prediction(df_raw)
-    
-    # Seuil de déclenchement (ex: 90% de confiance)
-    if confiance >= 0.90 and signal != "⏳ ATTENTE (NEUTRE)":
-        
-        # On vérifie si on a déjà envoyé une alerte récemment (ex: une par minute)
-        import time
-        current_time = time.time()
-        
-        if current_time - st.session_state.last_signal_time > 60:
-            msg = f"🚀 SIGNAL IA DERIV\n\nIndice: {sym_nom}\nSignal: {signal}\nConfiance: {confiance:.2%}"
-            send_telegram_msg(msg)
-            st.session_state.last_signal_time = current_time
-            st.toast("Message Telegram envoyé !", icon="📲")
