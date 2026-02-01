@@ -81,3 +81,24 @@ try:
 
 except Exception as e:
     st.warning("Aucune donnée détectée dans la base.")
+
+
+# Initialisation de la mémoire des alertes
+if 'last_signal_time' not in st.session_state:
+    st.session_state.last_signal_time = 0
+
+if mode_live:
+    signal, confiance = live_prediction(df_raw)
+    
+    # Seuil de déclenchement (ex: 90% de confiance)
+    if confiance >= 0.90 and signal != "⏳ ATTENTE (NEUTRE)":
+        
+        # On vérifie si on a déjà envoyé une alerte récemment (ex: une par minute)
+        import time
+        current_time = time.time()
+        
+        if current_time - st.session_state.last_signal_time > 60:
+            msg = f"🚀 SIGNAL IA DERIV\n\nIndice: {sym_nom}\nSignal: {signal}\nConfiance: {confiance:.2%}"
+            send_telegram_msg(msg)
+            st.session_state.last_signal_time = current_time
+            st.toast("Message Telegram envoyé !", icon="📲")
