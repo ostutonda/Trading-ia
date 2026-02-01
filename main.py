@@ -7,7 +7,7 @@ from src.indicators import apply_indicators
 from src.train_model import train_ia_model
 from src.trader import live_prediction
 
-st.set_page_config(page_title="CCTrada", layout="wide")
+st.set_page_config(page_title="Otm_ai_Trada", layout="wide")
 
 # --- SIDEBAR ---
 st.sidebar.header("\U0001f579\ufe0f Paramètres")
