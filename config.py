@@ -1,6 +1,7 @@
 # Configuration de l'API
 APP_ID = "122241" # Ton APP_ID
 DB_PATH = "database/trading_history.db"
+DERIV_TOKEN = "***********KBqI" # Token de compte Démo
 
 # Dictionnaire complet des indices par catégorie
 INDICES_CATEGORIES = {
