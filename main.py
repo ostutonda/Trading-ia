@@ -22,7 +22,7 @@ tf_nom = st.sidebar.selectbox("Timeframe", list(config.TIMEFRAMES.keys()))
 tf_val = config.TIMEFRAMES[tf_nom]
 
 # Nombre de bougies
-nb_candles = st.sidebar.number_input("Bougies à extraire", min_value=100, max_value=25000, value=2000)
+nb_candles = st.sidebar.number_input("Bougies à extraire", min_value=100, max_value=250000, value=3000)
 
 if st.sidebar.button("\U0001f4e5 Actualiser les données"):
     progress = st.progress(0)
