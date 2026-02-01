@@ -3,3 +3,4 @@ websocket-client
 scikit-learn
 pandas
 numpy
+tensorflow
