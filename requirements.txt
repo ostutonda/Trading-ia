@@ -1,3 +1,5 @@
-websocket-client
 streamlit
+websocket-client
+scikit-learn
 pandas
+numpy
