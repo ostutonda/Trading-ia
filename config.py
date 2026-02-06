@@ -1,39 +1,37 @@
-# Configuration de l'API
-APP_ID = "122241" # Ton APP_ID
-DB_PATH = "database/trading_history.db"
+
+# config.py
+import os
+
+APP_ID = 122241
+WS_URL = "wss://ws.deriv.com/websockets/v3"
+DB_PATH = os.path.join("database", "trading_history.db")
+MODEL_PATH = os.path.join("models", "model_v1.h5")
+
 DERIV_TOKEN = "***********KBqI" # Token de compte Démo
 
-# Dictionnaire complet des indices par catégorie
-INDICES_CATEGORIES = {
-    "Indices de Volatilité": {
-        "Volatility 10": "R_10",
-        "Volatility 25": "R_25",
-        "Volatility 50": "R_50",
-        "Volatility 75": "R_75",
-        "Volatility 100": "R_100"
-    },
-    "Indices de Volatilité (1s)": {
-        "Volatility 10 (1s)": "1HZ10V",
-        "Volatility 25 (1s)": "1HZ25V",
-        "Volatility 50 (1s)": "1HZ50V",
-        "Volatility 75 (1s)": "1HZ75V",
-        "Volatility 100 (1s)": "1HZ100V"
-    },
-    "Step Indices": {
-        "Step Index": "R_STP",
-        "Step Index 200": "STP_200",
-        "Step Index 500": "STP_500"
-    }
+
+
+ASSETS = {
+    "Volatilité 10": "R_10",
+    "Volatilité 25": "R_25",
+    "Volatilité 50": "R_50",
+    "Volatilité 75": "R_75",
+    "Volatilité 100": "R_100",
+    "Volatilité 10 (1s)": "1HZ10V",
+    "Volatilité 25 (1s)": "1HZ25V",
+    "Volatilité 50 (1s)": "1HZ50V",
+    "Volatilité 75 (1s)": "1HZ75V",
+    "Volatilité 100 (1s)": "1HZ100V",
+    "Step Index": "STEP",
+    "Gold (USD)": "frxXAUUSD"
 }
 
-# Configuration des Timeframes (en secondes)
 TIMEFRAMES = {
     "1 minute": 60,
     "2 minutes": 120,
-    "3 minutes": 180,
     "5 minutes": 300,
     "15 minutes": 900,
     "30 minutes": 1800,
-    "1 heure": 3600,
-    "4 heure": 1400
+    "45 minutes": 2700,
+    "1 heure": 3600
 }
