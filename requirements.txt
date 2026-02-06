@@ -6,3 +6,4 @@ numpy
 tensorflow
 requests
 tensorflow-cpu
+streamlit_lightweight_charts
