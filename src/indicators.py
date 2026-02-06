@@ -1,39 +1,33 @@
+# src/indicators.py
 import pandas as pd
-import numpy as np
+import pandas_ta as ta
 
-def apply_indicators(df):
-    # On s'assure que les données sont triées par le temps (epoch)
-    df = df.sort_values(by='epoch', ascending=True).copy()
-
-    # --- 1. MA 5 (Moyenne Mobile Simple) ---
-    df['MA_5'] = df['close'].rolling(window=5).mean()
-
-    # --- 2. EMA 100 (Moyenne Mobile Exponentielle) ---
-    df['EMA_100'] = df['close'].ewm(span=100, adjust=False).mean()
-
-    # --- 3. RSI 5 (Relative Strength Index) ---
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=5).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=5).mean()
-    rs = gain / loss
-    df['RSI_5'] = 100 - (100 / (1 + rs))
-
-    # --- 4. STOCHASTIQUE (47, 14, 15) ---
-    # %K = (Clôture actuelle - Plus bas N) / (Plus haut N - Plus bas N) * 100
-    low_min = df['low'].rolling(window=47).min()
-    high_max = df['high'].rolling(window=47).max()
+def add_indicators(df):
+    """Calcule MA5, SMMA35, RSI5, Stoch(47,14,15)"""
+    if df.empty: return df
     
-    # Calcul du %K brut
-    df['stoch_k_raw'] = ((df['close'] - low_min) / (high_max - low_min)) * 100
-    
-    # Lissage %K (smooth_k=15)
-    df['STOCHk_47_14_15'] = df['stoch_k_raw'].rolling(window=15).mean()
-    
-    # Calcul du %D (moyenne mobile de %K sur 14 périodes)
-    df['STOCHd_47_14_15'] = df['STOCHk_47_14_15'].rolling(window=14).mean()
+    # Copie pour éviter les warnings
+    df = df.copy()
 
-    # Nettoyage : On supprime les colonnes temporaires et les lignes vides (NaN)
-    df.drop(columns=['stoch_k_raw'], inplace=True)
-    df = df.dropna()
+    # 1. MA5
+    df['MA5'] = ta.sma(df['close'], length=5)
+
+    # 2. SMMA35 (Equivalent RMA dans pandas_ta)
+    df['SMMA35'] = ta.rma(df['close'], length=35)
+
+    # 3. RSI 5
+    df['RSI5'] = ta.rsi(df['close'], length=5)
+
+    # 4. Stochastique (47, 14, 15) -> %K et %D
+    stoch = ta.stoch(df['high'], df['low'], df['close'], k=47, d=14, smooth_k=15)
     
+    # Gestion des noms de colonnes dynamiques de pandas_ta
+    k_col = [c for c in stoch.columns if c.startswith('STOCHk')][0]
+    d_col = [c for c in stoch.columns if c.startswith('STOCHd')][0]
+    
+    df['STOCH_K'] = stoch[k_col]
+    df['STOCH_D'] = stoch[d_col]
+
+    df.dropna(inplace=True)
     return df
+ 
