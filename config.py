@@ -1,37 +1,26 @@
-
 # config.py
-import os
-
 APP_ID = 122241
 WS_URL = "wss://ws.deriv.com/websockets/v3"
-DB_PATH = os.path.join("database", "trading_history.db")
-MODEL_PATH = os.path.join("models", "model_v1.h5")
 
-DERIV_TOKEN = "***********KBqI" # Token de compte Démo
-
-
-
+# Listes d'actifs demandés
 ASSETS = {
-    "Volatilité 10": "R_10",
-    "Volatilité 25": "R_25",
-    "Volatilité 50": "R_50",
-    "Volatilité 75": "R_75",
-    "Volatilité 100": "R_100",
-    "Volatilité 10 (1s)": "1HZ10V",
-    "Volatilité 25 (1s)": "1HZ25V",
-    "Volatilité 50 (1s)": "1HZ50V",
-    "Volatilité 75 (1s)": "1HZ75V",
-    "Volatilité 100 (1s)": "1HZ100V",
-    "Step Index": "STEP",
-    "Gold (USD)": "frxXAUUSD"
+    'Forex / Métaux': ['frxXAUUSD'], # Gold
+    'Volatilité': [f'R_{i}' for i in [10, 25, 50, 75, 100]],
+    'Volatilité (1s)': [f'1HZ{i}V' for i in [10, 25, 50, 75, 100]],
+    'Step Indices': ['STEP_INDEX'] 
 }
 
+# Timeframes en secondes (pour l'API) et label pour l'UI
 TIMEFRAMES = {
-    "1 minute": 60,
-    "2 minutes": 120,
-    "5 minutes": 300,
-    "15 minutes": 900,
-    "30 minutes": 1800,
-    "45 minutes": 2700,
-    "1 heure": 3600
+    '1 Minute': 60,
+    '2 Minutes': 120,
+    '5 Minutes': 300,
+    '15 Minutes': 900,
+    '30 Minutes': 1800,
+    '45 Minutes': 2700,
+    '1 Heure': 3600
 }
+
+DB_PATH = 'database/trading_history.db'
+MODEL_PATH = 'models/model_v1.h5'
+SCALER_PATH = 'models/scaler.pkl'
