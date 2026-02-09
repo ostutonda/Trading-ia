@@ -1,33 +1,44 @@
 # src/indicators.py
+import talib
 import pandas as pd
-import pandas_ta as ta
+import numpy as np
+
+def calculate_smma(series, period):
+    """Calcule la Smoothed Moving Average (SMMA) manuellement car TA-Lib ne l'a pas directement."""
+    return series.ewm(alpha=1/period, adjust=False).mean()
 
 def add_indicators(df):
-    """Calcule MA5, SMMA35, RSI5, Stoch(47,14,15)"""
-    if df.empty: return df
-    
-    # Copie pour éviter les warnings
-    df = df.copy()
+    """
+    Ajoute: MA5, SMMA35, RSI5, Stoch(47,14,15)
+    """
+    if df.empty:
+        return df
+
+    data = df.copy()
+    close = data['close'].values
+    high = data['high'].values
+    low = data['low'].values
 
     # 1. MA5
-    df['MA5'] = ta.sma(df['close'], length=5)
+    data['MA5'] = talib.SMA(close, timeperiod=5)
 
-    # 2. SMMA35 (Equivalent RMA dans pandas_ta)
-    df['SMMA35'] = ta.rma(df['close'], length=35)
+    # 2. SMMA 35 (Moyenne Mobile Lisse)
+    data['SMMA35'] = calculate_smma(data['close'], 35)
 
     # 3. RSI 5
-    df['RSI5'] = ta.rsi(df['close'], length=5)
+    data['RSI5'] = talib.RSI(close, timeperiod=5)
 
     # 4. Stochastique (47, 14, 15) -> %K et %D
-    stoch = ta.stoch(df['high'], df['low'], df['close'], k=47, d=14, smooth_k=15)
-    
-    # Gestion des noms de colonnes dynamiques de pandas_ta
-    k_col = [c for c in stoch.columns if c.startswith('STOCHk')][0]
-    d_col = [c for c in stoch.columns if c.startswith('STOCHd')][0]
-    
-    df['STOCH_K'] = stoch[k_col]
-    df['STOCH_D'] = stoch[d_col]
+    slowk, slowd = talib.STOCH(
+        high, low, close,
+        fastk_period=47,
+        slowk_period=14,
+        slowk_matype=0,
+        slowd_period=15,
+        slowd_matype=0
+    )
+    data['Stoch_K'] = slowk
+    data['Stoch_D'] = slowd
 
-    df.dropna(inplace=True)
-    return df
- 
+    data.dropna(inplace=True)
+    return data
