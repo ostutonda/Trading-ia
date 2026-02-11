@@ -66,37 +66,38 @@ class DataFetcher:
         except Exception:
             return 0
 
-    def fetch_history_stream(self, symbol, timeframe_sec, start_dt, end_dt, progress_bar):
-        """Récupère l'historique en bouclant sur l'API Deriv (pagination)."""
-        
-        # 1. Connexion
-        if not self.ws or not self.ws.connected:
-            if not self.connect_ws():
-                return 0
+    # Dans src/data_fetcher.py
 
+    def fetch_history_stream(self, symbol, timeframe_sec, start_dt, end_dt, progress_bar):
+        """
+        Récupère l'historique strictement entre start_dt et end_dt.
+        """
+        if not self.ws or not self.ws.connected:
+            if not self.connect_ws(): return 0
+
+        # Conversion en timestamps (Epoch)
         start_epoch = int(start_dt.timestamp())
         target_end_epoch = int(end_dt.timestamp())
         
-        # On commence la requête à partir du début
         current_request_start = start_epoch
         total_candles_fetched = 0
         
         # Estimation pour la barre de progression
-        estimated_total_seconds = target_end_epoch - start_epoch
-        if estimated_total_seconds <= 0:
-            st.warning("La date de fin doit être après la date de début.")
+        total_duration = target_end_epoch - start_epoch
+        if total_duration <= 0:
+            st.warning("La date de fin doit être postérieure à la date de début.")
             return 0
 
-        st.write(f"📥 Démarrage du téléchargement pour {symbol}...")
+        st.info(f"⏳ Téléchargement de {symbol} du {start_dt} au {end_dt}...")
         
         while current_request_start < target_end_epoch:
-            # Deriv API Request: style 'candles'
+            # REQUÊTE API STRICTE : On donne le Debut ET la Fin précise
             req = {
                 "ticks_history": symbol,
                 "adjust_start_time": 1,
-                "count": 5000,        # Max autorisé par Deriv
-                "end": "latest",      # On filtre manuellement, mais on demande jusqu'au bout
+                "count": 5000,          # On demande le max par page
                 "start": current_request_start,
+                "end": target_end_epoch, # <--- ICI : On bloque la date de fin
                 "style": "candles",
                 "granularity": timeframe_sec
             }
@@ -107,85 +108,58 @@ class DataFetcher:
                 data = json.loads(resp)
 
                 if 'error' in data:
-                    st.error(f"API Error ({data['error']['code']}): {data['error']['message']}")
+                    # Certaines erreurs (comme "Start time is after end time") signifient qu'on a fini
+                    if "after end time" in data['error']['message']:
+                        break
+                    st.error(f"API Error: {data['error']['message']}")
                     break
 
                 candles = data.get('candles', [])
                 
+                # Si l'API ne renvoie rien, c'est qu'il n'y a pas de données sur cette période (ex: Week-end)
                 if not candles:
-                    # Aucune donnée retournée pour cette période (ex: week-end ou marché fermé)
-                    # On avance le curseur pour éviter une boucle infinie
+                    # On avance le curseur pour ne pas boucler indéfiniment
+                    # On ajoute l'équivalent de 5000 bougies en secondes
                     current_request_start += (5000 * timeframe_sec)
                     continue
 
-                # Filtrage et Préparation du Batch
+                # Filtrage supplémentaire de sécurité (bien que l'API respecte 'end')
                 batch_data = []
-                last_candle_epoch = candles[-1]['epoch']
+                last_epoch = candles[-1]['epoch']
                 
                 for c in candles:
-                    # On ne garde que ce qui est <= à la date de fin demandée
-                    if c['epoch'] <= target_end_epoch:
-                        batch_data.append((
-                            symbol, 
-                            timeframe_sec, 
-                            c['epoch'],
-                            c['open'], c['high'], c['low'], c['close']
-                        ))
+                    batch_data.append((
+                        symbol, timeframe_sec, c['epoch'],
+                        c['open'], c['high'], c['low'], c['close']
+                    ))
                 
-                # Sauvegarde en DB
-                if batch_data:
-                    self.save_to_db(batch_data)
-                    total_candles_fetched += len(batch_data)
+                # Sauvegarde
+                self.save_to_db(batch_data)
+                total_candles_fetched += len(batch_data)
 
-                # Mise à jour barre de progression
-                # On calcule le % basé sur le temps parcouru vs temps total
-                time_covered = last_candle_epoch - start_epoch
-                prog = min(1.0, time_covered / estimated_total_seconds)
-                progress_bar.progress(prog, text=f"Récupéré: {total_candles_fetched} bougies... (Date atteinte: {datetime.fromtimestamp(last_candle_epoch)})")
+                # Mise à jour barre progression
+                elapsed = last_epoch - start_epoch
+                prog = min(1.0, max(0.0, elapsed / total_duration))
+                progress_bar.progress(prog, text=f"Recupéré: {total_candles_fetched} bougies. (Date: {datetime.fromtimestamp(last_epoch)})")
 
-                # Condition de sortie : Si la dernière bougie reçue dépasse ou égale notre cible
-                if last_candle_epoch >= target_end_epoch:
+                # --- CONDITIONS DE SORTIE ET AVANCEMENT ---
+                
+                # Si la dernière bougie reçue est >= à notre date de fin cible
+                if last_epoch >= target_end_epoch:
                     break
                 
-                # Condition de sortie : Si l'API renvoie moins de bougies que demandé (fin des données dispos)
-                if len(candles) < 500: # Seuil de sécurité
-                    # Vérifions si nous sommes vraiment à la fin des temps (proche de "maintenant")
-                    if last_candle_epoch > (time.time() - timeframe_sec*10):
-                        break
+                # Si on a reçu moins de 5000 bougies, c'est que l'API n'en a plus jusqu'à la date 'end'
+                if len(candles) < 5000:
+                    break
 
-                # Préparation prochaine itération
-                # Important : On repart de la dernière epoch reçue + 1 seconde
-                current_request_start = last_candle_epoch + 1
+                # On avance le curseur : Start devient la fin du dernier batch + 1 seconde
+                current_request_start = last_epoch + 1
                 
-                # Pause anti-ban (Rate Limit)
-                time.sleep(0.2)
+                time.sleep(0.2) # Rate limit
 
             except Exception as e:
-                st.error(f"Erreur durant la boucle: {e}")
-                self.connect_ws() # Tentative de reconnexion
-                time.sleep(1)
+                st.error(f"Erreur boucle: {e}")
+                break
 
-        progress_bar.progress(1.0, text="✅ Téléchargement terminé !")
+        progress_bar.progress(1.0, text="✅ Terminé !")
         return total_candles_fetched
-
-    def save_to_db(self, data):
-        try:
-            conn = self.get_db_connection()
-            cursor = conn.cursor()
-            cursor.executemany('INSERT OR IGNORE INTO candles VALUES (?,?,?,?,?,?,?)', data)
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            st.error(f"Erreur DB: {e}")
-
-    def load_data(self, symbol, timeframe):
-        conn = self.get_db_connection()
-        # On charge avec tri par epoch croissant
-        df = pd.read_sql(
-            "SELECT * FROM candles WHERE symbol=? AND timeframe=? ORDER BY epoch ASC",
-            conn, params=(symbol, timeframe)
-        )
-        conn.close()
-        if not df.empty:
-            df['date'] = pd.to_datetime(df['epoch'], unit='s')
-        return df
