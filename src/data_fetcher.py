@@ -1,124 +1,107 @@
 # src/data_fetcher.py
-import json
-import ssl
-import sqlite3
-import time
-import websocket
-import pandas as pd
-from datetime import datetime
-import streamlit as st
-from config import APP_ID, WS_URL, DB_PATH
-
-class DataFetcher:
-    def __init__(self):
-        self.ws = None
-        self.init_db()
-
-    def init_db(self):
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS candles (
-                    symbol TEXT, timeframe INTEGER, epoch INTEGER,
-                    open REAL, high REAL, low REAL, close REAL,
-                    PRIMARY KEY (symbol, timeframe, epoch)
-                )
-            ''')
-
-    def is_connected(self):
-        """Vérifie si le socket est réellement ouvert."""
-        try:
-            return self.ws and self.ws.connected
-        except:
-            return False
-
-    def connect_ws(self):
-        """Tente une connexion avec gestion SSL."""
-        try:
-            self.ws = websocket.create_connection(
-                f"{WS_URL}?app_id={APP_ID}",
-                sslopt={"cert_reqs": ssl.CERT_NONE},
-                timeout=10
-            )
-            return True
-        except Exception as e:
-            st.error(f"Échec de connexion : {e}")
-            return False
 
     def fetch_history_stream(self, symbol, timeframe_sec, start_dt, end_dt, progress_bar):
-        """Boucle de récupération robuste avec auto-reconnexion."""
-        target_start = int(start_dt.timestamp())
-        target_end = int(end_dt.timestamp())
-        current_pointer = target_start
-        total_saved = 0
+        """
+        Récupère TOUTES les bougies sans exception entre start_dt et end_dt.
+        Gère les gaps de marché et la pagination par 5000.
+        """
+        if not self.ws or not self.ws.connected:
+            if not self.connect_ws(): return 0
 
-        while current_pointer < target_end:
-            # 1. Vérification / Réouverture de la connexion
-            if not self.is_connected():
-                if not self.connect_ws():
-                    time.sleep(2) # Attendre avant de réessayer
-                    continue
+        # Conversion précise en timestamps
+        start_epoch = int(start_dt.timestamp())
+        target_end_epoch = int(end_dt.timestamp())
+        
+        current_ptr = start_epoch
+        total_count = 0
+        
+        # Durée totale pour le calcul du % de progression
+        total_duration = target_end_epoch - start_epoch
+        if total_duration <= 0:
+            st.warning("La date de fin doit être après le début.")
+            return 0
 
-            # 2. Préparation de la requête par lots (max 5000)
+        st.info(f"🚀 Récupération exhaustive pour {symbol}...")
+
+        # Boucle tant qu'on n'a pas atteint la date cible
+        while current_ptr < target_end_epoch:
             req = {
                 "ticks_history": symbol,
                 "adjust_start_time": 1,
                 "count": 5000,
-                "start": current_pointer,
-                "end": target_end,
+                "start": current_ptr,
+                "end": target_end_epoch,
                 "style": "candles",
                 "granularity": timeframe_sec
             }
-
+            
             try:
                 self.ws.send(json.dumps(req))
-                response = json.loads(self.ws.recv())
+                resp = self.ws.recv()
+                data = json.loads(resp)
 
-                if 'error' in response:
-                    st.error(f"Erreur API : {response['error']['message']}")
+                if 'error' in data:
+                    # Si l'erreur dit que le start est après le end, on a fini
+                    if "start time is after end time" in data['error']['message'].lower():
+                        break
+                    st.error(f"API Error: {data['error']['message']}")
                     break
 
-                candles = response.get('candles', [])
+                candles = data.get('candles', [])
+
                 if not candles:
-                    # Si aucune donnée, on avance le curseur pour éviter la boucle infinie
-                    current_pointer += 5000 * timeframe_sec
+                    # --- GESTION DES GAPS (Week-ends / Maintenance) ---
+                    # Si l'API ne renvoie rien, on avance le pointeur de 1 jour 
+                    # pour chercher plus loin, sinon on reste bloqué dans le vide.
+                    current_ptr += 86400 # Saut de 24h
+                    if current_ptr > target_end_epoch:
+                        break
                     continue
 
-                # 3. Traitement et sauvegarde
-                batch = [
-                    (symbol, timeframe_sec, c['epoch'], c['open'], c['high'], c['low'], c['close'])
-                    for c in candles if c['epoch'] <= target_end
-                ]
+                # On prépare les données pour SQLite
+                batch = []
+                last_epoch_received = candles[-1]['epoch']
                 
-                self._save_batch(batch)
-                total_saved += len(batch)
+                for c in candles:
+                    # Sécurité : on ne dépasse jamais la date de fin demandée
+                    if c['epoch'] <= target_end_epoch:
+                        batch.append((
+                            symbol, timeframe_sec, c['epoch'],
+                            c['open'], c['high'], c['low'], c['close']
+                        ))
+
+                # Sauvegarde immédiate du lot
+                if batch:
+                    self.save_to_db(batch)
+                    total_count += len(batch)
+
+                # Mise à jour de l'UI
+                progress = min(1.0, (last_epoch_received - start_epoch) / total_duration)
+                date_str = datetime.fromtimestamp(last_epoch_received).strftime('%Y-%m-%d %H:%M')
+                progress_bar.progress(progress, text=f"📦 {total_count} bougies | Actuel: {date_str}")
+
+                # --- CONDITION DE PROGRESSION ---
+                # On repart de la dernière bougie reçue + timeframe pour ne pas avoir de doublon
+                if last_epoch_received >= target_end_epoch:
+                    break
                 
-                # Mise à jour du pointeur pour le prochain lot
-                last_epoch = candles[-1]['epoch']
-                current_pointer = last_epoch + 1
+                # Si on a reçu moins de 5000 bougies, on a peut-être atteint la fin des données dispo
+                if len(candles) < 5000:
+                    # On vérifie si on est proche du "Maintenant" (à 2 bougies près)
+                    if last_epoch_received >= (int(time.time()) - (timeframe_sec * 2)):
+                        break
+                    else:
+                        # On est sur un gap (ex: vendredi soir), on saute au lundi
+                        current_ptr = last_epoch_received + 3600 # On avance d'une heure pour chercher
+                else:
+                    current_ptr = last_epoch_received + timeframe_sec
 
-                # 4. Feedback UI
-                progress = min(1.0, (current_pointer - target_start) / (target_end - target_start))
-                progress_bar.progress(progress, text=f"Récupéré : {total_saved} bougies...")
-
-                # Pause respectueuse pour l'API
-                time.sleep(0.3)
+                # Respecter les limites de débit de l'API (Rate limiting)
+                time.sleep(0.1)
 
             except Exception as e:
-                st.warning(f"Interruption détectée ({e}). Tentative de reconnexion...")
-                self.ws = None # Forcer la reconnexion au prochain tour
+                st.error(f"Interruption : {e}")
+                break
 
-        return total_saved
-
-    def _save_batch(self, data):
-        with sqlite3.connect(DB_PATH) as conn:
-            conn.executemany('INSERT OR IGNORE INTO candles VALUES (?,?,?,?,?,?,?)', data)
-
-    def load_data(self, symbol, timeframe):
-        with sqlite3.connect(DB_PATH) as conn:
-            df = pd.read_sql(
-                "SELECT * FROM candles WHERE symbol=? AND timeframe=? ORDER BY epoch ASC",
-                conn, params=(symbol, timeframe)
-            )
-        if not df.empty:
-            df['date'] = pd.to_datetime(df['epoch'], unit='s')
-        return df
+        progress_bar.progress(1.0, text=f"✅ Terminé : {total_count} bougies en base.")
+        return total_count
