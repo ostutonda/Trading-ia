@@ -86,3 +86,88 @@ with tab2:
                     ws = st.session_state.fetcher.ws
                     ws.send(json.dumps({"ticks": symbol}))
                 time.sleep(0.1)
+
+
+# Dans main.py, remplace tout le contenu sous "with tab3:" par ceci :
+
+with tab3:
+    st.header("🔴 Trading en Temps Réel")
+    
+    col_live1, col_live2 = st.columns([1, 3])
+    
+    with col_live1:
+        live_active = st.checkbox("Activer Connexion Live", value=False)
+        st.divider()
+        # --- PLACEHOLDERS POUR LE PRIX ---
+        price_display = st.empty()
+        status_display = st.empty()
+        
+    with col_live2:
+        chart_placeholder = st.empty()
+        
+    if live_active:
+        import ssl
+        
+        # Connexion dédiée au Live (Tick Stream)
+        try:
+            full_url = f"{WS_URL}?app_id={APP_ID}"
+            ws_live = websocket.create_connection(full_url, sslopt={"cert_reqs": ssl.CERT_NONE})
+            
+            # S'abonner au flux de ticks pour l'actif choisi
+            ws_live.send(json.dumps({"ticks": symbol}))
+            
+            live_prices = []
+            last_price = 0.0
+            
+            status_display.info("En attente de ticks...")
+            
+            while live_active:
+                resp = ws_live.recv()
+                data = json.loads(resp)
+                
+                if 'tick' in data:
+                    # Récupération du prix
+                    current_price = float(data['tick']['quote'])
+                    epoch = data['tick']['epoch']
+                    
+                    # --- AFFICHAGE DU PRIX (GROS) ---
+                    delta = 0.0
+                    if last_price > 0:
+                        delta = current_price - last_price
+                        
+                    price_display.metric(
+                        label=f"Prix {symbol}",
+                        value=f"{current_price:.2f}",
+                        delta=f"{delta:.2f}" # Affiche la variation en vert/rouge auto
+                    )
+                    
+                    last_price = current_price
+                    
+                    # --- MISE A JOUR GRAPHIQUE LIVE ---
+                    live_prices.append(current_price)
+                    if len(live_prices) > 100: live_prices.pop(0) # Garder les 100 derniers ticks
+                    
+                    fig_live = go.Figure()
+                    fig_live.add_trace(go.Scatter(
+                        y=live_prices, 
+                        mode='lines',
+                        line=dict(color='#00CC96')
+                    ))
+                    fig_live.update_layout(
+                        title="Flux Ticks (Temps Réel)",
+                        margin=dict(l=0, r=0, t=30, b=0),
+                        height=350,
+                        template="plotly_dark"
+                    )
+                    chart_placeholder.plotly_chart(fig_live, use_container_width=True)
+                    
+                    # Ici tu pourras ajouter ta logique de prédiction IA plus tard...
+                    
+                # Gestion erreurs API live
+                if 'error' in data:
+                    status_display.error(f"Erreur Live: {data['error']['message']}")
+                    break
+                    
+        except Exception as e:
+            st.error(f"Erreur de connexion Live: {e}")
+            live_active = False
