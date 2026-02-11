@@ -8,3 +8,4 @@ requests
 tensorflow-cpu
 streamlit_lightweight_charts
 Plotly
+talib
