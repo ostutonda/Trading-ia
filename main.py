@@ -1,213 +1,88 @@
 # main.py
 import streamlit as st
-import pandas as pd
+from datetime import date, datetime
+import plotly.graph_objects as go
+import json
 import time
-from datetime import datetime, timedelta
-from streamlit_lightweight_charts import renderLightweightCharts
-import numpy as np
 
-# Imports internes
-from config import ASSETS, TIMEFRAMES, WS_URL
-from src.data_fetcher import DerivClient
-from src.ml_logic import TradingModel
+from config import ASSETS, TIMEFRAMES, APP_ID, WS_URL
+from src.data_fetcher import DataFetcher
+from src.indicators import add_indicators
 
-# --- Configuration de la page ---
-st.set_page_config(page_title="OtmAnalytics", layout="wide", page_icon="📈")
+st.set_page_config(page_title="OtmAnalytics Pro", layout="wide")
+st.title("📈 OtmAnalytics - Dashboard de Trading")
 
-# --- Gestion de l'état (Session State) ---
-if 'deriv' not in st.session_state:
-    st.session_state.deriv = DerivClient()
-if 'trading_model' not in st.session_state:
-    st.session_state.trading_model = TradingModel()
-if 'selected_asset_code' not in st.session_state:
-    st.session_state.selected_asset_code = None
+if 'fetcher' not in st.session_state:
+    st.session_state.fetcher = DataFetcher()
 
-client = st.session_state.deriv
+# Sidebar
+st.sidebar.header("Paramètres")
+category = st.sidebar.selectbox("Marché", list(ASSETS.keys()))
+symbol = st.sidebar.selectbox("Actif", ASSETS[category])
+tf_label = st.sidebar.selectbox("Périodicité", list(TIMEFRAMES.keys()))
+tf_sec = TIMEFRAMES[tf_label]
 
-# --- Sidebar : Configuration ---
-st.sidebar.title("⚙️ OtmAnalytics Config")
+tab1, tab2 = st.tabs(["📥 Historique", "🔴 Live & IA"])
 
-# 1. Connexion API
-st.sidebar.subheader("Connexion Deriv API")
-ws_status = st.sidebar.empty()
-
-if client.connected:
-    ws_status.success("Connecté à wss://ws.deriv.com")
-else:
-    ws_status.error("Déconnecté")
-
-if st.sidebar.button("Tester Connexion / Reconnecter"):
-    client.connect()
-    time.sleep(1)
-    st.rerun()
-
-# 2. Paramètres Actifs
-st.sidebar.markdown("---")
-st.sidebar.subheader("Sélection Actif")
-
-selected_asset_name = st.sidebar.selectbox("Choisir l'actif", list(ASSETS.keys()))
-selected_asset_code = ASSETS[selected_asset_name]
-st.session_state.selected_asset_code = selected_asset_code
-
-# Info DB vs Live
-db_pct = client.check_db_completeness(selected_asset_code)
-st.sidebar.progress(db_pct / 100, text=f"Données locales: {db_pct}% à jour")
-
-timeframe_name = st.sidebar.selectbox("Timeframe", list(TIMEFRAMES.keys()))
-granularity = TIMEFRAMES[timeframe_name]
-
-# 3. Paramètres Date
-st.sidebar.markdown("---")
-mode_date = st.sidebar.radio("Mode Période", ["Plage de dates", "Date unique"])
-if mode_date == "Plage de dates":
-    d_start = st.sidebar.date_input("Début", datetime.now() - timedelta(days=7))
-    d_end = st.sidebar.date_input("Fin", datetime.now())
-else:
-    d_single = st.sidebar.date_input("Date", datetime.now())
-    d_start = d_single
-    d_end = d_single + timedelta(days=1)
-
-# --- Interface Principale ---
-
-tab1, tab2, tab3 = st.tabs(["📊 Dashboard Live", "💾 Données & Historique", "🧠 IA & Backtesting"])
-
-# === TAB 1: DASHBOARD ===
+# --- ONGLET 1 : RÉCUPÉRATION ---
 with tab1:
-    st.subheader(f"Suivi Temps Réel: {selected_asset_name}")
-    
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        # Zone Graphique (Chart.js / TradingView style via Streamlit wrapper)
-        # On charge un peu d'historique DB pour afficher le graph
-        df_display = client.get_db_data(selected_asset_code)
-        
-        if not df_display.empty:
-            # Formatage pour lightweight-charts
-            candles_data = []
-            for index, row in df_display.tail(200).iterrows():
-                candles_data.append({
-                    "time": int(index.timestamp()),
-                    "open": row['open'],
-                    "high": row['high'],
-                    "low": row['low'],
-                    "close": row['close']
-                })
+    col1, col2 = st.columns(2)
+    start_date = col1.date_input("Depuis le", date(2024, 1, 1))
+    end_date = col2.date_input("Jusqu'au", date.today())
 
-            chart_options = {
-                "layout": {"textColor": "white", "background": {"type": "solid", "color": "#1E1E1E"}},
-                "grid": {"vertLines": {"color": "#333"}, "horzLines": {"color": "#333"}}
-            }
-            
-            series = [{
-                "type": "Candlestick",
-                "data": candles_data,
-                "options": {
-                    "upColor": "#26a69a",
-                    "downColor": "#ef5350",
-                    "borderVisible": False,
-                    "wickUpColor": "#26a69a",
-                    "wickDownColor": "#ef5350"
-                }
-            }]
-            
-            st.markdown("### Graphique Technique")
-            renderLightweightCharts(series, options=chart_options, height=400)
-        else:
-            st.info("Aucune donnée historique trouvée. Veuillez télécharger les données dans l'onglet 'Données'.")
-
-    with col2:
-        st.markdown("### Prix Live")
-        price_placeholder = st.empty()
+    if st.button("Lancer la récupération forcée", type="primary"):
+        start_dt = datetime.combine(start_date, datetime.min.time())
+        end_dt = datetime.combine(end_date, datetime.max.time())
         
-        # Abonnement Live
-        if client.connected:
-            client.subscribe(selected_asset_code)
-            
-            # Affichage boucle simple (simulation temps réel dans Streamlit)
-            # Note: En prod, on utiliserait st.experimental_rerun() avec parcimonie ou stream
-            if client.latest_tick['symbol'] == selected_asset_code:
-                price = client.latest_tick['price']
-                price_placeholder.metric("Prix", f"{price:.2f}")
-            else:
-                price_placeholder.markdown("En attente de tick...")
-        
-        st.markdown("---")
-        st.markdown("### Prédiction IA")
-        # Placeholder pour l'ordre
-        st.info("ORDRE: --")
-        st.text("Entrée: --")
-        st.text("TP: --")
-        st.text("SL: --")
+        bar = st.progress(0, "Initialisation...")
+        count = st.session_state.fetcher.fetch_history_stream(symbol, tf_sec, start_dt, end_dt, bar)
+        st.success(f"Opération terminée : {count} bougies enregistrées.")
 
-# === TAB 2: DONNÉES ===
+    # Graphique
+    df = st.session_state.fetcher.load_data(symbol, tf_sec)
+    if not df.empty:
+        df = add_indicators(df)
+        fig = go.Figure(data=[go.Candlestick(x=df['date'], open=df['open'], high=df['high'], low=df['low'], close=df['close'])])
+        fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig, use_container_width=True)
+
+# --- ONGLET 2 : LIVE ---
 with tab2:
-    st.header("Gestion des Données Historiques")
+    st.subheader(f"Trading Live : {symbol}")
     
-    st.write(f"Télécharger les données pour **{selected_asset_name}** ({timeframe_name})")
-    
-    if st.button("Lancer le téléchargement"):
-        start_epoch = int(datetime.combine(d_start, datetime.min.time()).timestamp())
-        end_epoch = int(datetime.combine(d_end, datetime.max.time()).timestamp())
-        
-        progress_bar = st.progress(0, text="Initialisation...")
-        
-        def update_prog(p):
-            progress_bar.progress(p, text=f"Sauvegarde en cours: {int(p*100)}%")
+    c1, c2 = st.columns([1, 2])
+    run_live = c1.toggle("Démarrer le flux temps réel")
+    price_metric = c1.empty()
+    chart_live = c2.empty()
+
+    if run_live:
+        # On utilise une connexion dédiée au live
+        if st.session_state.fetcher.connect_ws():
+            ws = st.session_state.fetcher.ws
+            ws.send(json.dumps({"ticks": symbol}))
             
-        count = client.fetch_and_store_history(selected_asset_code, granularity, start_epoch, end_epoch, update_prog)
-        
-        progress_bar.progress(100, text="Terminé !")
-        st.success(f"{count} bougies sauvegardées dans SQLite.")
+            history_prices = []
+            last_p = 0.0
 
-    st.markdown("---")
-    st.subheader("Aperçu de la Base de Données")
-    df = client.get_db_data(selected_asset_code)
-    st.dataframe(df.tail(10))
-
-# === TAB 3: IA & BACKTESTING ===
-with tab3:
-    st.header("Modèle GRU & Backtesting")
-    
-    col_train, col_test = st.columns(2)
-    
-    with col_train:
-        st.subheader("Entraînement")
-        st.write("Architecture: 2 couches GRU, Dropout 0.2, Softmax, Batch 64")
-        
-        if st.button("Entraîner le modèle (Nouveau)"):
-            with st.spinner("Chargement des données et calcul des indicateurs..."):
-                df_train = client.get_db_data(selected_asset_code)
-                if not df_train.empty:
-                    res = st.session_state.trading_model.train(df_train)
-                    st.success(res)
-                else:
-                    st.error("Base de données vide pour cet actif.")
-                    
-    with col_test:
-        st.subheader("Backtesting")
-        if st.button("Lancer Backtest sur Historique"):
-            df_bt = client.get_db_data(selected_asset_code)
-            if not df_bt.empty:
-                results = st.session_state.trading_model.backtest(df_bt)
-                if not results.empty:
-                    st.dataframe(results)
-                    
-                    # Stats sommaires
-                    total_trades = len(results)
-                    wins = len(results[results['Resultat'] > 0])
-                    win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
-                    profit = results['Resultat'].sum()
-                    
-                    st.metric("Profit Total", f"{profit:.2f}")
-                    st.metric("Win Rate", f"{win_rate:.2f}%")
-                    st.line_chart(results['Balance'])
-                else:
-                    st.warning("Pas assez de données ou pas de modèle chargé.")
-            else:
-                st.error("Pas de données.")
-
-# Refresh automatique pour le Live tick (méthode simple)
-if client.connected:
-    time.sleep(1)
-    st.rerun()
+            while run_live:
+                try:
+                    data = json.loads(ws.recv())
+                    if 'tick' in data:
+                        p = data['tick']['quote']
+                        diff = p - last_p if last_p != 0 else 0
+                        price_metric.metric("Prix Actuel", f"{p:.2f}", f"{diff:.2f}")
+                        
+                        history_prices.append(p)
+                        if len(history_prices) > 50: history_prices.pop(0)
+                        
+                        # Graphique simplifié
+                        fig_l = go.Figure(go.Scatter(y=history_prices, mode='lines+markers', line=dict(color='#00ff00')))
+                        fig_l.update_layout(template="plotly_dark", height=300, margin=dict(l=0,r=0,t=0,b=0))
+                        chart_live.plotly_chart(fig_l, use_container_width=True)
+                        
+                        last_p = p
+                except:
+                    st.session_state.fetcher.connect_ws() # Reconnexion auto
+                    ws = st.session_state.fetcher.ws
+                    ws.send(json.dumps({"ticks": symbol}))
+                time.sleep(0.1)
