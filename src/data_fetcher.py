@@ -14,128 +14,111 @@ class DataFetcher:
         self.ws = None
         self.init_db()
 
-    def get_db_connection(self):
-        return sqlite3.connect(DB_PATH)
-
     def init_db(self):
-        conn = self.get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS candles (
-                symbol TEXT,
-                timeframe INTEGER,
-                epoch INTEGER,
-                open REAL,
-                high REAL,
-                low REAL,
-                close REAL,
-                PRIMARY KEY (symbol, timeframe, epoch)
-            )
-        ''')
-        conn.commit()
-        conn.close()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS candles (
+                    symbol TEXT, timeframe INTEGER, epoch INTEGER,
+                    open REAL, high REAL, low REAL, close REAL,
+                    PRIMARY KEY (symbol, timeframe, epoch)
+                )
+            ''')
+
+    def is_connected(self):
+        """Vérifie si le socket est réellement ouvert."""
+        try:
+            return self.ws and self.ws.connected
+        except:
+            return False
 
     def connect_ws(self):
-        # --- GESTION SSL CONTEXT (Fix Pylance/Cert errors) ---
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-        
+        """Tente une connexion avec gestion SSL."""
         try:
             self.ws = websocket.create_connection(
                 f"{WS_URL}?app_id={APP_ID}",
-                sslopt={"cert_reqs": ssl.CERT_NONE}
+                sslopt={"cert_reqs": ssl.CERT_NONE},
+                timeout=10
             )
             return True
         except Exception as e:
-            st.error(f"Erreur WebSocket: {e}")
+            st.error(f"Échec de connexion : {e}")
             return False
 
-    def get_stored_count(self, symbol, timeframe):
-        conn = self.get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM candles WHERE symbol=? AND timeframe=?", (symbol, timeframe))
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count
-
     def fetch_history_stream(self, symbol, timeframe_sec, start_dt, end_dt, progress_bar):
-        if not self.ws or not self.ws.connected:
-            if not self.connect_ws(): return
+        """Boucle de récupération robuste avec auto-reconnexion."""
+        target_start = int(start_dt.timestamp())
+        target_end = int(end_dt.timestamp())
+        current_pointer = target_start
+        total_saved = 0
 
-        start_epoch = int(start_dt.timestamp())
-        end_epoch = int(end_dt.timestamp())
-        current_start = start_epoch
-        
-        total_candles = 0
-        
-        # Estimer le nombre total de bougies pour la barre de progression
-        estimated_total = (end_epoch - start_epoch) // timeframe_sec
-        if estimated_total == 0: estimated_total = 1
+        while current_pointer < target_end:
+            # 1. Vérification / Réouverture de la connexion
+            if not self.is_connected():
+                if not self.connect_ws():
+                    time.sleep(2) # Attendre avant de réessayer
+                    continue
 
-        while current_start < end_epoch:
+            # 2. Préparation de la requête par lots (max 5000)
             req = {
                 "ticks_history": symbol,
                 "adjust_start_time": 1,
                 "count": 5000,
-                "end": "latest",
-                "start": current_start,
+                "start": current_pointer,
+                "end": target_end,
                 "style": "candles",
                 "granularity": timeframe_sec
             }
-            
-            self.ws.send(json.dumps(req))
-            resp = self.ws.recv()
-            data = json.loads(resp)
 
-            if 'error' in data:
-                st.error(f"API Error: {data['error']['message']}")
-                break
+            try:
+                self.ws.send(json.dumps(req))
+                response = json.loads(self.ws.recv())
 
-            candles = data.get('candles', [])
-            if not candles:
-                break
+                if 'error' in response:
+                    st.error(f"Erreur API : {response['error']['message']}")
+                    break
 
-            # Filtrage et Préparation
-            batch_data = []
-            last_epoch = candles[-1]['epoch']
-            
-            for c in candles:
-                if c['epoch'] <= end_epoch:
-                    batch_data.append((
-                        symbol, timeframe_sec, c['epoch'],
-                        c['open'], c['high'], c['low'], c['close']
-                    ))
-            
-            # Sauvegarde DB
-            self.save_to_db(batch_data)
-            total_candles += len(batch_data)
-            
-            # Mise à jour UI
-            prog = min(1.0, (current_start - start_epoch) / (end_epoch - start_epoch))
-            progress_bar.progress(prog, text=f"Téléchargement: {total_candles} bougies...")
+                candles = response.get('candles', [])
+                if not candles:
+                    # Si aucune donnée, on avance le curseur pour éviter la boucle infinie
+                    current_pointer += 5000 * timeframe_sec
+                    continue
 
-            if last_epoch == current_start: break
-            current_start = last_epoch + 1
-            time.sleep(0.2) # Rate limit protection
+                # 3. Traitement et sauvegarde
+                batch = [
+                    (symbol, timeframe_sec, c['epoch'], c['open'], c['high'], c['low'], c['close'])
+                    for c in candles if c['epoch'] <= target_end
+                ]
+                
+                self._save_batch(batch)
+                total_saved += len(batch)
+                
+                # Mise à jour du pointeur pour le prochain lot
+                last_epoch = candles[-1]['epoch']
+                current_pointer = last_epoch + 1
 
-        progress_bar.progress(1.0, text="Téléchargement terminé !")
-        return total_candles
+                # 4. Feedback UI
+                progress = min(1.0, (current_pointer - target_start) / (target_end - target_start))
+                progress_bar.progress(progress, text=f"Récupéré : {total_saved} bougies...")
 
-    def save_to_db(self, data):
-        conn = self.get_db_connection()
-        cursor = conn.cursor()
-        cursor.executemany('INSERT OR IGNORE INTO candles VALUES (?,?,?,?,?,?,?)', data)
-        conn.commit()
-        conn.close()
+                # Pause respectueuse pour l'API
+                time.sleep(0.3)
+
+            except Exception as e:
+                st.warning(f"Interruption détectée ({e}). Tentative de reconnexion...")
+                self.ws = None # Forcer la reconnexion au prochain tour
+
+        return total_saved
+
+    def _save_batch(self, data):
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.executemany('INSERT OR IGNORE INTO candles VALUES (?,?,?,?,?,?,?)', data)
 
     def load_data(self, symbol, timeframe):
-        conn = self.get_db_connection()
-        df = pd.read_sql(
-            "SELECT * FROM candles WHERE symbol=? AND timeframe=? ORDER BY epoch ASC",
-            conn, params=(symbol, timeframe)
-        )
-        conn.close()
+        with sqlite3.connect(DB_PATH) as conn:
+            df = pd.read_sql(
+                "SELECT * FROM candles WHERE symbol=? AND timeframe=? ORDER BY epoch ASC",
+                conn, params=(symbol, timeframe)
+            )
         if not df.empty:
             df['date'] = pd.to_datetime(df['epoch'], unit='s')
         return df
